@@ -1,0 +1,10 @@
+{
+  "name": "opencode-parallel-orchestrator-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "Git worktree-based parallel task orchestration plugin for OpenCode",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}
