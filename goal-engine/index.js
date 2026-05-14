@@ -654,6 +654,60 @@ When an active goal exists, the system prompt is automatically injected with the
       }
     },
 
+    // ── /goal slash-command emulation via chat.message hook ───────────────
+    // OpenCode plugins cannot register slash commands, so we intercept
+    // messages that start with /goal and rewrite them into explicit
+    // tool-call instructions so the LLM executes the right goal_engine action.
+    "chat.message": async (msgInput, output) => {
+      try {
+        const textPart = output.parts?.find((p) => p.type === "text");
+        if (!textPart) return;
+        const raw = textPart.text?.trim() ?? "";
+        if (!raw.startsWith("/goal")) return;
+
+        const rest = raw.slice(5).trim();
+        const [sub, ...argTokens] = rest.split(/\s+/);
+        const argText = argTokens.join(" ");
+
+        let instruction;
+        switch ((sub ?? "").toLowerCase()) {
+          case "start":
+            instruction = argText
+              ? `Call the goal_engine tool with action="start" and objective="${argText}". Confirm the goal was set.`
+              : `Call the goal_engine tool with action="status" and display the result.`;
+            break;
+          case "pause":
+            instruction = `Call the goal_engine tool with action="pause". Confirm.`;
+            break;
+          case "pause-now":
+          case "pause_now":
+            instruction = `Call the goal_engine tool with action="pause_now". Confirm.`;
+            break;
+          case "resume":
+            instruction = `Call the goal_engine tool with action="resume". If a paused goal exists, resume it and continue working toward it.`;
+            break;
+          case "clear":
+            instruction = `Call the goal_engine tool with action="clear" and confirmed=true. Confirm the goal was cleared.`;
+            break;
+          case "status":
+            instruction = `Call the goal_engine tool with action="status" and display the result.`;
+            break;
+          case "report":
+            instruction = `Call the goal_engine tool with action="report" and display the full report.`;
+            break;
+          default:
+            // Bare "/goal <objective>" — treat whole rest as the objective
+            instruction = rest
+              ? `Call the goal_engine tool with action="start" and objective="${rest}". Confirm the goal was set.`
+              : `Call the goal_engine tool with action="status" and display the result.`;
+        }
+
+        textPart.text = instruction;
+      } catch {
+        // Non-fatal
+      }
+    },
+
     // ── Compaction: preserve goal context ─────────────────────────────────
     "experimental.session.compacting": async (compactInput, output) => {
       try {
