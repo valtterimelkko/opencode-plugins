@@ -28,10 +28,10 @@ import { tool } from "@opencode-ai/plugin/tool";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { exec as execCallback } from "node:child_process";
+import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 
-const execAsync = promisify(execCallback);
+const execFileAsync = promisify(execFileCallback);
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -39,6 +39,11 @@ const GOAL_DIR = path.join(os.homedir(), ".opencode", "goal-engine");
 const DEFAULT_MAX_TURNS = 100;
 const MAX_CONSECUTIVE_ERRORS = 3;
 const CONTINUATION_DELAY_MS = 300;
+
+// Minimum gap between two auto-continuations for the same session.
+// Prevents duplicate continuations when multiple session.idle events arrive
+// in quick succession from batched message completions.
+const CONTINUATION_COOLDOWN_MS = 5_000;
 
 const COMPLETION_PATTERNS = [
   /\bGOAL_ACHIEVED\b/i,
@@ -280,7 +285,12 @@ function updateProgressFromText(gs, text) {
 async function verifyCompletion(verifyCommand) {
   if (!verifyCommand) return { ok: true, message: "No verification command." };
   try {
-    await execAsync(verifyCommand, { timeout: 120_000, maxBuffer: 1024 * 1024 });
+    // Use bash explicitly — the default /bin/sh (dash on Debian/Ubuntu) does not
+    // support bash-isms like process substitution or some quoting patterns.
+    await execFileAsync("/bin/bash", ["-c", verifyCommand], {
+      timeout: 120_000,
+      maxBuffer: 1024 * 1024,
+    });
     return { ok: true, message: "Verification passed." };
   } catch (err) {
     const output = [err.stdout, err.stderr].filter(Boolean).join("\n").trim();
@@ -290,7 +300,7 @@ async function verifyCompletion(verifyCommand) {
 
 // ── Auto-continuation logic ────────────────────────────────────────────────
 
-async function processAgentEnd(sessionID, gs, lastText, client, errorCounters) {
+async function processAgentEnd(sessionID, gs, lastText, client, errorCounters, lastContinuationAt) {
   const currentErrors = errorCounters.get(sessionID) ?? 0;
 
   // Detect empty-turn (likely abort or immediate error with no output)
@@ -329,7 +339,7 @@ async function processAgentEnd(sessionID, gs, lastText, client, errorCounters) {
           return;
         }
         await saveGoalState(sessionID, gs);
-        await queueContinuation(sessionID, client);
+        await queueContinuation(sessionID, client, lastContinuationAt);
         return;
       }
     }
@@ -362,10 +372,10 @@ async function processAgentEnd(sessionID, gs, lastText, client, errorCounters) {
   }
 
   await saveGoalState(sessionID, gs);
-  await queueContinuation(sessionID, client);
+  await queueContinuation(sessionID, client, lastContinuationAt);
 }
 
-async function queueContinuation(sessionID, client) {
+async function queueContinuation(sessionID, client, lastContinuationAt) {
   await new Promise((resolve) => setTimeout(resolve, CONTINUATION_DELAY_MS));
 
   // Re-read fresh state to check goal wasn't paused/cleared in the interim
@@ -384,6 +394,9 @@ async function queueContinuation(sessionID, client) {
         ],
       },
     });
+    // Record the time of this successful continuation so the cooldown check in
+    // the event hook can suppress duplicate idle events from the same batch.
+    lastContinuationAt.set(sessionID, Date.now());
   } catch (err) {
     console.error("[goal-engine] Failed to send continuation message:", err?.message ?? err);
   }
@@ -397,8 +410,11 @@ export default async function GoalEnginePlugin(input) {
   // Per-session text accumulation (for completion detection)
   const sessionText = new Map(); // sessionID -> accumulated assistant text
   const errorCounters = new Map(); // sessionID -> consecutive error count
-  // Sessions where we're actively processing an agent_end (prevent double-fire)
+  // Sessions where we're actively processing an agent_end (prevent concurrent double-fire)
   const processingEnd = new Set();
+  // Timestamps of the last continuation sent per session (prevent sequential double-fire
+  // when batched message completions emit multiple session.idle events in quick succession)
+  const lastContinuationAt = new Map(); // sessionID -> ms timestamp
 
   return {
     // ── Tools ────────────────────────────────────────────────────────────
@@ -640,7 +656,13 @@ When an active goal exists, the system prompt is automatically injected with the
 
         if (!isIdle) return;
 
-        // Guard against concurrent processing for the same session
+        // Guard 1: suppress duplicate idle events from the same completion batch.
+        // Multiple session.idle events can arrive sequentially (one per queued message)
+        // within a second or two of each other; only the first should trigger continuation.
+        const lastFired = lastContinuationAt.get(sessionID) ?? 0;
+        if (Date.now() - lastFired < CONTINUATION_COOLDOWN_MS) return;
+
+        // Guard 2: prevent concurrent processing for the same session.
         if (processingEnd.has(sessionID)) return;
         processingEnd.add(sessionID);
 
@@ -654,7 +676,7 @@ When an active goal exists, the system prompt is automatically injected with the
           const lastText = sessionText.get(sessionID) ?? "";
           sessionText.delete(sessionID);
 
-          await processAgentEnd(sessionID, gs, lastText, client, errorCounters);
+          await processAgentEnd(sessionID, gs, lastText, client, errorCounters, lastContinuationAt);
         } finally {
           processingEnd.delete(sessionID);
         }
@@ -754,8 +776,13 @@ When an active goal exists, the system prompt is automatically injected with the
         const gs = await loadGoalState(sessionID);
         if (!isActiveGoal(gs)) return;
 
+        // Deduplicate: if the hook fires more than once for the same compaction
+        // (observed in some OpenCode versions), skip the second firing.
+        const now = Date.now();
+        if (gs.lastCompactedAt && now - gs.lastCompactedAt < 10_000) return;
+
         gs.compactionCount += 1;
-        gs.lastCompactedAt = Date.now();
+        gs.lastCompactedAt = now;
         await saveGoalState(sessionID, gs);
 
         output.context.push(buildGoalPrompt(gs));
