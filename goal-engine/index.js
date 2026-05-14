@@ -614,14 +614,22 @@ When an active goal exists, the system prompt is automatically injected with the
           (props.sessionID ?? props.sessionId);
         if (!sessionID) return;
 
-        // Accumulate assistant text during streaming
+        // Accumulate the TAIL of assistant text during streaming.
+        // We only need the last ~3000 chars to detect GOAL_ACHIEVED patterns —
+        // accumulating the full turn output causes O(n²) string copies and
+        // crushes CPU for long-running turns (each delta appended to a copy
+        // of the entire accumulated string so far).
         if (
           event.type === "message.part.delta" &&
           props.field === "text" &&
           typeof props.delta === "string"
         ) {
           const existing = sessionText.get(sessionID) ?? "";
-          sessionText.set(sessionID, existing + props.delta);
+          const combined = existing + props.delta;
+          sessionText.set(
+            sessionID,
+            combined.length > 3000 ? combined.slice(-3000) : combined,
+          );
         }
 
         // Detect session idle → process agent end
