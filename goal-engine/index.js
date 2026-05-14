@@ -655,9 +655,12 @@ When an active goal exists, the system prompt is automatically injected with the
     },
 
     // ── /goal slash-command emulation via chat.message hook ───────────────
-    // OpenCode plugins cannot register slash commands, so we intercept
-    // messages that start with /goal and rewrite them into explicit
-    // tool-call instructions so the LLM executes the right goal_engine action.
+    // OpenCode plugins cannot register slash commands from the server side,
+    // so we intercept /goal messages and either:
+    //  - For read-only commands (status, report): read the goal file directly
+    //    and inject pre-formatted output — the LLM just echoes it, no tool call.
+    //  - For mutations (start, pause, resume, clear): rewrite to an explicit
+    //    tool-call directive the LLM executes.
     "chat.message": async (msgInput, output) => {
       try {
         const textPart = output.parts?.find((p) => p.type === "text");
@@ -668,38 +671,49 @@ When an active goal exists, the system prompt is automatically injected with the
         const rest = raw.slice(5).trim();
         const [sub, ...argTokens] = rest.split(/\s+/);
         const argText = argTokens.join(" ");
+        const subCmd = (sub ?? "").toLowerCase();
 
+        // ── Read-only: format directly, no tool call needed ────────────────
+        if (subCmd === "status" || subCmd === "report" || (subCmd === "" && !rest)) {
+          const gs = await loadGoalState(msgInput.sessionID).catch(() => ({ ...EMPTY_GOAL_STATE }));
+          let formatted;
+          if (!gs.objective) {
+            formatted = "No goal is active in this session.\n\nStart one with: /goal <your objective>";
+          } else if (subCmd === "report") {
+            formatted = formatReport(gs);
+          } else {
+            formatted = formatStatusLines(gs).join("\n");
+          }
+          textPart.text = `Output the following goal status to the user exactly as shown, no extra commentary:\n\n${formatted}`;
+          return;
+        }
+
+        // ── Mutations: instruct the LLM to call the goal_engine tool ───────
         let instruction;
-        switch ((sub ?? "").toLowerCase()) {
+        switch (subCmd) {
           case "start":
             instruction = argText
-              ? `Call the goal_engine tool with action="start" and objective="${argText}". Confirm the goal was set.`
-              : `Call the goal_engine tool with action="status" and display the result.`;
+              ? `Use the goal_engine tool now: action="start", objective="${argText}". After calling it, immediately begin working on the goal.`
+              : `Use the goal_engine tool: action="status". Display the result.`;
             break;
           case "pause":
-            instruction = `Call the goal_engine tool with action="pause". Confirm.`;
+            instruction = `Use the goal_engine tool now: action="pause". Acknowledge that the goal will pause after the current step.`;
             break;
           case "pause-now":
           case "pause_now":
-            instruction = `Call the goal_engine tool with action="pause_now". Confirm.`;
+            instruction = `Use the goal_engine tool now: action="pause_now". Acknowledge the goal is immediately paused.`;
             break;
           case "resume":
-            instruction = `Call the goal_engine tool with action="resume". If a paused goal exists, resume it and continue working toward it.`;
+            instruction = `Use the goal_engine tool now: action="resume". If a paused goal exists, resume it and continue working toward it immediately.`;
             break;
           case "clear":
-            instruction = `Call the goal_engine tool with action="clear" and confirmed=true. Confirm the goal was cleared.`;
-            break;
-          case "status":
-            instruction = `Call the goal_engine tool with action="status" and display the result.`;
-            break;
-          case "report":
-            instruction = `Call the goal_engine tool with action="report" and display the full report.`;
+            instruction = `Use the goal_engine tool now: action="clear", confirmed=true. Acknowledge the goal was cleared.`;
             break;
           default:
-            // Bare "/goal <objective>" — treat whole rest as the objective
+            // Bare "/goal <objective>" — whole rest is the objective
             instruction = rest
-              ? `Call the goal_engine tool with action="start" and objective="${rest}". Confirm the goal was set.`
-              : `Call the goal_engine tool with action="status" and display the result.`;
+              ? `Use the goal_engine tool now: action="start", objective="${rest}". After calling it, immediately begin working on the goal.`
+              : `Use the goal_engine tool: action="status". Display the result.`;
         }
 
         textPart.text = instruction;
@@ -732,3 +746,56 @@ When an active goal exists, the system prompt is automatically injected with the
     },
   };
 }
+
+// ── TUI plugin: register /goal commands in the OpenCode command palette ────────
+// This named export is loaded by OpenCode's TUI layer and adds /goal suggestions
+// to the slash-command autocomplete. The `api.command.register` call is guarded
+// so it silently no-ops if the TUI layer isn't present.
+export const tui = async (api) => {
+  if (!api?.command?.register) return;
+  api.command.register(() => [
+    {
+      title: "goal <objective>",
+      value: "/goal ",
+      description: "Start autonomous goal — agent works until objective is achieved",
+      category: "Goal Engine",
+      slash: { name: "goal" },
+    },
+    {
+      title: "goal status",
+      value: "/goal status",
+      description: "Show current goal status and progress",
+      category: "Goal Engine",
+    },
+    {
+      title: "goal report",
+      value: "/goal report",
+      description: "Detailed goal execution report",
+      category: "Goal Engine",
+    },
+    {
+      title: "goal pause",
+      value: "/goal pause",
+      description: "Pause the goal gracefully after the current step",
+      category: "Goal Engine",
+    },
+    {
+      title: "goal pause-now",
+      value: "/goal pause-now",
+      description: "Pause the goal immediately",
+      category: "Goal Engine",
+    },
+    {
+      title: "goal resume",
+      value: "/goal resume",
+      description: "Resume a paused goal",
+      category: "Goal Engine",
+    },
+    {
+      title: "goal clear",
+      value: "/goal clear",
+      description: "Abandon and clear the current goal",
+      category: "Goal Engine",
+    },
+  ]);
+};
