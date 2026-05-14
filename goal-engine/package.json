@@ -1,0 +1,10 @@
+{
+  "name": "opencode-goal-engine",
+  "version": "1.0.0",
+  "description": "Autonomous multi-turn goal execution plugin for OpenCode",
+  "type": "module",
+  "main": "index.js",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}
