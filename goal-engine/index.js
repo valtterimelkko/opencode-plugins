@@ -69,6 +69,7 @@ const EMPTY_GOAL_STATE = {
   lastCompactedAt: null,
   lastCompactionTokens: null,
   lastCompactionEntryId: null,
+  showWidget: true,
 };
 
 function normalizeGoalState(data) {
@@ -676,15 +677,32 @@ When an active goal exists, the system prompt is automatically injected with the
         // ── Read-only: format directly, no tool call needed ────────────────
         if (subCmd === "status" || subCmd === "report" || (subCmd === "" && !rest)) {
           const gs = await loadGoalState(msgInput.sessionID).catch(() => ({ ...EMPTY_GOAL_STATE }));
-          let formatted;
+
           if (!gs.objective) {
-            formatted = "No goal is active in this session.\n\nStart one with: /goal <your objective>";
-          } else if (subCmd === "report") {
-            formatted = formatReport(gs);
-          } else {
-            formatted = formatStatusLines(gs).join("\n");
+            textPart.text = `Output this text to the user exactly: "No goal is active in this session.\n\nStart one with: /goal <your objective>"`;
+            return;
           }
-          textPart.text = `Output the following goal status to the user exactly as shown, no extra commentary:\n\n${formatted}`;
+
+          if (subCmd === "report") {
+            // report always shows regardless of toggle
+            const formatted = formatReport(gs);
+            textPart.text = `Output the following goal report to the user exactly as shown, no extra commentary:\n\n${formatted}`;
+            return;
+          }
+
+          // /goal status toggles the widget on/off
+          const wasShowing = gs.showWidget !== false;  // default true
+          gs.showWidget = !wasShowing;
+          await saveGoalState(msgInput.sessionID, gs);
+
+          if (gs.showWidget) {
+            // Toggled ON: show the status
+            const formatted = formatStatusLines(gs).join("\n");
+            textPart.text = `Output the following goal status to the user exactly as shown, no extra commentary:\n\n${formatted}`;
+          } else {
+            // Toggled OFF: confirm dismissal briefly
+            textPart.text = `Tell the user in one line: "Goal status widget hidden — type /goal status again to show it."`;
+          }
           return;
         }
 
