@@ -679,30 +679,28 @@ When an active goal exists, the system prompt is automatically injected with the
           const gs = await loadGoalState(msgInput.sessionID).catch(() => ({ ...EMPTY_GOAL_STATE }));
 
           if (!gs.objective) {
-            textPart.text = `Output this text to the user exactly: "No goal is active in this session.\n\nStart one with: /goal <your objective>"`;
+            textPart.text = `Output this text exactly:\n\nNo goal is active in this session.\n\nStart one with: /goal <your objective>`;
             return;
           }
 
           if (subCmd === "report") {
-            // report always shows regardless of toggle
             const formatted = formatReport(gs);
-            textPart.text = `Output the following goal report to the user exactly as shown, no extra commentary:\n\n${formatted}`;
+            textPart.text = `Output the following goal report exactly as shown, no extra commentary:\n\n${formatted}`;
             return;
           }
 
-          // /goal status toggles the widget on/off
-          const wasShowing = gs.showWidget !== false;  // default true
+          // /goal status: ALWAYS shows the formatted status.
+          // Also toggles the web UI sidebar widget as a side-effect so the
+          // user can dismiss or restore it without losing the status text here.
+          const wasShowing = gs.showWidget !== false;
           gs.showWidget = !wasShowing;
           await saveGoalState(msgInput.sessionID, gs);
 
-          if (gs.showWidget) {
-            // Toggled ON: show the status
-            const formatted = formatStatusLines(gs).join("\n");
-            textPart.text = `Output the following goal status to the user exactly as shown, no extra commentary:\n\n${formatted}`;
-          } else {
-            // Toggled OFF: confirm dismissal briefly
-            textPart.text = `Tell the user in one line: "Goal status widget hidden — type /goal status again to show it."`;
-          }
+          const formatted = formatStatusLines(gs).join("\n");
+          const widgetNote = gs.showWidget
+            ? "(Web UI status panel: now visible)"
+            : "(Web UI status panel: now hidden — type /goal status again to show it)";
+          textPart.text = `Output the following goal status exactly as shown, no extra commentary:\n\n${formatted}\n\n${widgetNote}`;
           return;
         }
 
