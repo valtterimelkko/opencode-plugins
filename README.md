@@ -8,7 +8,7 @@ These plugins were built to make OpenCode feel less like a bare runtime connecti
 
 I wanted OpenCode to participate in the same broader workflow philosophy as my Pi-based setup: persistent goals, better memory, and safer parallel execution. This repository packages the OpenCode side of that work.
 
-It is also designed to pair well with **Pi Web UI**, where some plugin-generated state can be surfaced in the browser as status widgets or normalized session events.
+It is also designed to pair well with **[Pi Web UI](https://github.com/valtterimelkko/pi-web-ui)**, where some plugin-generated state can be surfaced in the browser as status widgets or normalized session events.
 
 ## Plugins in this repository
 
@@ -42,7 +42,7 @@ Features:
 ## Relationship to Pi Web UI
 
 These plugins can be useful on their own, but they are especially relevant if you also use:
-- **Pi Web UI** as a browser interface around OpenCode
+- **[Pi Web UI](https://github.com/valtterimelkko/pi-web-ui)** as a browser interface around OpenCode
 - companion Pi extensions in a separate Pi-focused repository
 
 Pi Web UI can operate without these plugins, but some workflow niceties become richer when they are installed.
