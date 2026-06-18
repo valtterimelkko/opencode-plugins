@@ -46,10 +46,9 @@ const CONTINUATION_DELAY_MS = 300;
 const CONTINUATION_COOLDOWN_MS = 5_000;
 
 const COMPLETION_PATTERNS = [
-  /\bGOAL_ACHIEVED\b/i,
-  /\bOBJECTIVE_ACHIEVED\b/i,
-  /\ball tasks (?:are )?complete\b/i,
-  /\bthe goal has been (?:fully )?achieved\b/i,
+  /^\s*(?:[-*]\s*)?(?:\*\*)?Status(?:\*\*)?\s*:\s*(?:\*\*)?GOAL_ACHIEVED(?:\*\*)?\s*$/i,
+  /^\s*(?:[-*]\s*)?(?:\*\*)?Status(?:\*\*)?\s*:\s*(?:\*\*)?OBJECTIVE_ACHIEVED(?:\*\*)?\s*$/i,
+  /^\s*(?:[-*]\s*)?(?:\*\*)?Status(?:\*\*)?\s*:\s*(?:\*\*)?(?:all tasks (?:are )?complete|the goal has been (?:fully )?achieved)(?:\*\*)?\s*$/i,
 ];
 
 // ── Goal state ──────────────────────────────────────────────────────────────
@@ -336,9 +335,9 @@ function formatReport(gs) {
 
 // ── Completion detection ───────────────────────────────────────────────────
 
-function isGoalAchieved(text) {
+export function isGoalAchieved(text) {
   if (!text || text.length < 5) return false;
-  return COMPLETION_PATTERNS.some((p) => p.test(text));
+  return text.split(/\r?\n/).some((line) => COMPLETION_PATTERNS.some((p) => p.test(line)));
 }
 
 // ── Progress parsing ───────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isGoalAchieved,
   parseGoalStartOptions,
   parseSlashGoalCommand,
   shouldSuppressIdleEvent,
@@ -45,4 +46,9 @@ test('shouldSuppressIdleEvent suppresses duplicate idle events with no new text'
   const lastContinuationAt = new Map([['ses_dup', 10_000]]);
 
   assert.equal(shouldSuppressIdleEvent('ses_dup', sessionText, lastContinuationAt, 12_000), true);
+});
+
+test('isGoalAchieved requires an explicit status line, not an incidental mention', () => {
+  assert.equal(isGoalAchieved('Never say GOAL_ACHIEVED until finished.\nStatus: CONTINUING'), false);
+  assert.equal(isGoalAchieved('All checks passed.\n**Status: GOAL_ACHIEVED**'), true);
 });

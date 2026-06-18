@@ -74,7 +74,7 @@ const sessionId = created.sessionId;
 let nativeSessionId;
 
 try {
-  await prompt(sessionId, 'Use the goal_engine tool now: action="start", objective="Quick live validation of goal command actions. Stay active until explicitly cleared; each response should end with Status: CONTINUING.", max_turns=20. After calling it, reply briefly with Status: CONTINUING.');
+  await prompt(sessionId, 'Use the goal_engine tool now: action="start", objective="Quick live validation of goal command actions. Stay active until explicitly cleared; each incomplete response should end with Status: CONTINUING.", max_turns=20. After calling it, reply briefly with Status: CONTINUING.');
   let info = await request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/info`);
   nativeSessionId = info.nativeSessionId;
   assertStep(nativeSessionId?.startsWith('ses_'), 'native OpenCode session id exposed', nativeSessionId);
