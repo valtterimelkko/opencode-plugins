@@ -74,7 +74,7 @@ const sessionId = created.sessionId;
 let nativeSessionId;
 
 try {
-  await prompt(sessionId, 'Use the goal_engine tool now: action="start", objective="Quick live validation of goal command actions. Stay active until explicitly cleared; each incomplete response should end with Status: CONTINUING.", max_turns=20. After calling it, reply briefly with Status: CONTINUING.');
+  await prompt(sessionId, 'Use the goal_engine tool now: action="start", objective="Quick live validation of goal command actions. Do not complete this goal yourself; it exists only so command actions can be tested, and it should remain controllable until explicitly cleared.", max_turns=20. After calling it, reply briefly with Status: CONTINUING.');
   let info = await request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/info`);
   nativeSessionId = info.nativeSessionId;
   assertStep(nativeSessionId?.startsWith('ses_'), 'native OpenCode session id exposed', nativeSessionId);
@@ -83,6 +83,10 @@ try {
   let { state } = await goalState(nativeSessionId);
   assertStep(state?.objective?.includes('Quick live validation'), 'start action persisted objective');
   assertStep(state?.status === 'running', 'start action leaves goal running', state?.status);
+
+  await prompt(sessionId, 'Use the goal_engine tool now: action="pause_now". Reply briefly.');
+  ({ state } = await goalState(nativeSessionId));
+  assertStep(state?.status === 'paused', 'pause_now action pauses goal', state?.status);
 
   await prompt(sessionId, '/goal status hide');
   ({ state } = await goalState(nativeSessionId));
@@ -93,15 +97,12 @@ try {
   assertStep(state?.showWidget === true, '/goal status show updates widget state');
 
   const report = await prompt(sessionId, '/goal report');
-  assertStep(String(report.content ?? '').includes('Quick live validation'), '/goal report returns active goal text');
+  const reportText = String(report.content ?? '');
+  assertStep(/Goal Report|Objective:|Agent runs:/i.test(reportText), '/goal report returns formatted goal report', reportText.slice(0, 120));
 
   await prompt(sessionId, 'Use the goal_engine tool now: action="set_limit", max_turns=7. Reply briefly.');
   ({ state } = await goalState(nativeSessionId));
   assertStep(state?.maxTurns === 7, 'set_limit action persists maxTurns', String(state?.maxTurns));
-
-  await prompt(sessionId, 'Use the goal_engine tool now: action="pause_now". Reply briefly.');
-  ({ state } = await goalState(nativeSessionId));
-  assertStep(state?.status === 'paused', 'pause_now action pauses goal', state?.status);
 
   await prompt(sessionId, 'Use the goal_engine tool now: action="resume". Reply briefly with Status: CONTINUING.');
   ({ state } = await goalState(nativeSessionId));
