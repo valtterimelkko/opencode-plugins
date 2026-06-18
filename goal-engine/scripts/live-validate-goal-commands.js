@@ -59,6 +59,18 @@ async function goalState(nativeSessionId) {
   }
 }
 
+async function waitForGoalState(nativeSessionId, predicate, timeoutMs = 30_000) {
+  const started = Date.now();
+  let latest = null;
+  while (Date.now() - started < timeoutMs) {
+    const result = await goalState(nativeSessionId);
+    latest = result.state;
+    if (predicate(latest)) return result;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return { file: path.join(os.homedir(), '.opencode', 'goal-engine', `${nativeSessionId}.goal.json`), state: latest };
+}
+
 function assertStep(condition, label, details = '') {
   if (!condition) throw new Error(`FAIL ${label}${details ? ` — ${details}` : ''}`);
   console.log(`PASS ${label}${details ? ` — ${details}` : ''}`);
@@ -84,8 +96,8 @@ try {
   assertStep(state?.objective?.includes('Quick live validation'), 'start action persisted objective');
   assertStep(state?.status === 'running', 'start action leaves goal running', state?.status);
 
-  await prompt(sessionId, 'Use the goal_engine tool now: action="pause_now". Reply briefly.');
-  ({ state } = await goalState(nativeSessionId));
+  await prompt(sessionId, '/goal pause-now');
+  ({ state } = await waitForGoalState(nativeSessionId, (candidate) => candidate?.status === 'paused'));
   assertStep(state?.status === 'paused', 'pause_now action pauses goal', state?.status);
 
   await prompt(sessionId, '/goal status hide');
@@ -100,20 +112,24 @@ try {
   const reportText = String(report.content ?? '');
   assertStep(/Goal Report|Objective:|Agent runs:/i.test(reportText), '/goal report returns formatted goal report', reportText.slice(0, 120));
 
+  const list = await prompt(sessionId, '/goal list');
+  const listText = String(list.content ?? '');
+  assertStep(/Goal Report|Objective:|Agent runs:/i.test(listText), '/goal list returns a persisted goal report', listText.slice(0, 120));
+
   await prompt(sessionId, 'Use the goal_engine tool now: action="set_limit", max_turns=7. Reply briefly.');
-  ({ state } = await goalState(nativeSessionId));
+  ({ state } = await waitForGoalState(nativeSessionId, (candidate) => candidate?.maxTurns === 7));
   assertStep(state?.maxTurns === 7, 'set_limit action persists maxTurns', String(state?.maxTurns));
 
-  await prompt(sessionId, 'Use the goal_engine tool now: action="resume". Reply briefly with Status: CONTINUING.');
-  ({ state } = await goalState(nativeSessionId));
+  await prompt(sessionId, '/goal resume');
+  ({ state } = await waitForGoalState(nativeSessionId, (candidate) => candidate?.status === 'running'));
   assertStep(state?.status === 'running', 'resume action resumes goal', state?.status);
 
-  await prompt(sessionId, 'Use the goal_engine tool now: action="pause". Reply briefly.');
-  ({ state } = await goalState(nativeSessionId));
+  await prompt(sessionId, '/goal pause');
+  ({ state } = await waitForGoalState(nativeSessionId, (candidate) => candidate?.status === 'paused' || candidate?.status === 'wrapping-up'));
   assertStep(state?.status === 'paused' || state?.status === 'wrapping-up', 'pause action requests/enters paused state', state?.status);
 
-  await prompt(sessionId, 'Use the goal_engine tool now: action="clear", confirmed=true. Reply briefly.');
-  ({ state } = await goalState(nativeSessionId));
+  await prompt(sessionId, '/goal clear');
+  ({ state } = await waitForGoalState(nativeSessionId, (candidate) => !candidate || candidate.status === 'idle' || !candidate.objective));
   assertStep(!state || state.status === 'idle' || !state.objective, 'clear action removes active goal');
 
   console.log(JSON.stringify({ success: true, sessionId, nativeSessionId, model }, null, 2));
