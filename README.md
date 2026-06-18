@@ -17,10 +17,10 @@ Autonomous multi-turn goal execution for OpenCode.
 
 Features:
 - define a goal and keep working toward it across turns
-- pause, resume, clear, and inspect goal state
+- pause, resume, clear, inspect, and resume the most recent persisted goal
 - session-scoped disk persistence
-- verification-oriented completion model
-- companion status rendering in Pi Web UI when used together
+- verification-oriented completion model with optional shell verification
+- companion status rendering in Pi Web UI when used together, including compaction progress
 
 ### `opencode-memory-plugin`
 Persistent memory helper for OpenCode.

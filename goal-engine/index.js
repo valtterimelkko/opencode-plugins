@@ -119,6 +119,113 @@ async function removeGoalState(sessionID) {
 
 // ── Goal prompt builder ────────────────────────────────────────────────────
 
+export function stripWrappingQuotes(input) {
+  const trimmed = input.trim();
+  if (trimmed.length < 2) return trimmed;
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  const quotePairs = { '"': '"', "'": "'", "“": "”", "‘": "’" };
+  const expectedLast = quotePairs[first];
+  if (expectedLast && last === expectedLast) return trimmed.slice(1, -1).trim();
+  if ((first === '"' || first === "“") && (last === '"' || last === "”")) return trimmed.slice(1, -1).trim();
+  if ((first === "'" || first === "‘") && (last === "'" || last === "’")) return trimmed.slice(1, -1).trim();
+  return trimmed;
+}
+
+export function parseGoalStartOptions(input) {
+  let working = input.trim();
+  let verifyCommand = null;
+  let maxTurns = DEFAULT_MAX_TURNS;
+
+  working = working.replace(/\s+--verify\s+(?:"([^"]+)"|'([^']+)'|“([^”]+)”|(\S+))/g, (_all, dbl, single, smart, bare) => {
+    verifyCommand = (dbl ?? single ?? smart ?? bare ?? "").trim() || null;
+    return "";
+  });
+
+  working = working.replace(/\s+--max-turns\s+(\d+)/g, (_all, value) => {
+    const parsed = Number(value);
+    maxTurns = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TURNS;
+    return "";
+  });
+
+  return {
+    objective: stripWrappingQuotes(working),
+    maxTurns,
+    verifyCommand,
+  };
+}
+
+function splitSubcommand(input) {
+  const match = input.trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  return { subcommand: (match?.[1] ?? "").toLowerCase(), rest: (match?.[2] ?? "").trim() };
+}
+
+function parseStatusMode(input) {
+  const mode = input.trim().toLowerCase();
+  if (mode === "show") return "show";
+  if (mode === "hide" || mode === "off" || mode === "clear") return "hide";
+  return "toggle";
+}
+
+export function parseSlashGoalCommand(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("/goal")) return { kind: "none" };
+  const rest = trimmed.slice(5).trim();
+  if (!rest) return { kind: "status", mode: "toggle" };
+
+  const { subcommand, rest: subRest } = splitSubcommand(rest);
+  switch (subcommand) {
+    case "status":
+      return { kind: "status", mode: parseStatusMode(subRest) };
+    case "report":
+      return { kind: "report" };
+    case "list":
+      return { kind: "list" };
+    case "pause":
+      return { kind: "tool", action: "pause" };
+    case "pause-now":
+    case "pause_now":
+      return { kind: "tool", action: "pause_now" };
+    case "resume":
+      return { kind: "tool", action: "resume" };
+    case "resume-last":
+    case "resume_last":
+      return { kind: "tool", action: "resume_last" };
+    case "clear":
+      return { kind: "tool", action: "clear", confirmed: true };
+    case "limit":
+      return { kind: "tool", action: "set_limit", maxTurns: Number(subRest.trim()) };
+    case "start":
+      return { kind: "start", options: parseGoalStartOptions(subRest) };
+    default:
+      return { kind: "start", options: parseGoalStartOptions(rest) };
+  }
+}
+
+async function findMostRecentGoal() {
+  const candidates = [];
+  try {
+    const entries = await fs.readdir(GOAL_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".goal.json")) continue;
+      const filePath = path.join(GOAL_DIR, entry.name);
+      try {
+        const [stat, raw] = await Promise.all([fs.stat(filePath), fs.readFile(filePath, "utf-8")]);
+        const goal = normalizeGoalState(JSON.parse(raw));
+        if (!goal.objective || goal.status === "idle") continue;
+        candidates.push({ filePath, goal, updatedAt: stat.mtimeMs });
+      } catch {
+        // Skip unreadable goal files.
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  candidates.sort((a, b) => (b.goal.startedAt || b.updatedAt) - (a.goal.startedAt || a.updatedAt));
+  return candidates[0] ?? null;
+}
+
 function buildGoalPrompt(gs) {
   const parts = [];
   parts.push("## Active Goal");
@@ -195,6 +302,7 @@ function formatStatusLines(gs) {
   if (gs.compactionCount > 0) {
     lines.push(`Compactions: ${gs.compactionCount}`);
     if (gs.lastCompactedAt) lines.push(`Last compaction: ${new Date(gs.lastCompactedAt).toLocaleString()}`);
+    if (gs.lastCompactionTokens !== null && gs.lastCompactionTokens !== undefined) lines.push(`Last compacted tokens: ${gs.lastCompactionTokens}`);
   }
 
   if (gs.consecutiveErrors > 0 || gs.lastErrorMessage) {
@@ -443,6 +551,7 @@ When an active goal exists, the system prompt is automatically injected with the
             "status",
             "report",
             "set_limit",
+            "resume_last",
           ]),
           objective: tool.schema
             .string()
@@ -460,6 +569,9 @@ When an active goal exists, the system prompt is automatically injected with the
             .boolean()
             .optional()
             .describe("Must be true for destructive actions like clear"),
+          status_mode: tool.schema.enum(["toggle", "show", "hide"])
+            .optional()
+            .describe("Display mode for status/widget visibility"),
         },
         async execute(args, ctx) {
           const sessionID = ctx.sessionID;
@@ -553,6 +665,23 @@ When an active goal exists, the system prompt is automatically injected with the
               };
             }
 
+            case "resume_last": {
+              if (isActiveGoal(gs)) {
+                return { output: "A goal is already active in this session.", metadata: { error: true } };
+              }
+              const found = await findMostRecentGoal();
+              if (!found || !found.goal.objective || found.goal.status === "idle") {
+                return { output: "No resumable disk-persisted goal found.", metadata: {} };
+              }
+              const resumed = { ...found.goal, status: "running", consecutiveErrors: 0 };
+              errorCounters.set(sessionID, 0);
+              await saveGoalState(sessionID, resumed);
+              return {
+                output: `▶ Resuming last persisted goal: "${resumed.objective.slice(0, 60)}${resumed.objective.length > 60 ? "…" : ""}"\n\nRe-read key files, reconstruct progress, and continue from the latest verified state.`,
+                metadata: { resumed: true, source: found.filePath },
+              };
+            }
+
             case "clear": {
               if (gs.status === "idle" || !gs.objective) {
                 return { output: "No active goal to clear.", metadata: {} };
@@ -575,6 +704,10 @@ When an active goal exists, the system prompt is automatically injected with the
                   metadata: { status: "idle" },
                 };
               }
+              if (args.status_mode === "show") gs.showWidget = true;
+              else if (args.status_mode === "hide") gs.showWidget = false;
+              else if (args.status_mode === "toggle") gs.showWidget = gs.showWidget === false;
+              if (args.status_mode) await saveGoalState(sessionID, gs);
               return {
                 output: formatStatusLines(gs).join("\n"),
                 metadata: { goalState: gs },
@@ -699,67 +832,69 @@ When an active goal exists, the system prompt is automatically injected with the
         const raw = textPart.text?.trim() ?? "";
         if (!raw.startsWith("/goal")) return;
 
-        const rest = raw.slice(5).trim();
-        const [sub, ...argTokens] = rest.split(/\s+/);
-        const argText = argTokens.join(" ");
-        const subCmd = (sub ?? "").toLowerCase();
+        const command = parseSlashGoalCommand(raw);
 
         // ── Read-only: format directly, no tool call needed ────────────────
-        if (subCmd === "status" || subCmd === "report" || (subCmd === "" && !rest)) {
-          const gs = await loadGoalState(msgInput.sessionID).catch(() => ({ ...EMPTY_GOAL_STATE }));
+        if (command.kind === "status" || command.kind === "report" || command.kind === "list") {
+          let gs = await loadGoalState(msgInput.sessionID).catch(() => ({ ...EMPTY_GOAL_STATE }));
+
+          if (command.kind === "list") {
+            const found = await findMostRecentGoal();
+            const formatted = found?.goal?.objective ? formatReport(found.goal) : "No disk-persisted goal found.";
+            textPart.text = `Output the following goal report exactly as shown, no extra commentary:\n\n${formatted}`;
+            return;
+          }
 
           if (!gs.objective) {
             textPart.text = `Output this text exactly:\n\nNo goal is active in this session.\n\nStart one with: /goal <your objective>`;
             return;
           }
 
-          if (subCmd === "report") {
+          if (command.kind === "report") {
             const formatted = formatReport(gs);
             textPart.text = `Output the following goal report exactly as shown, no extra commentary:\n\n${formatted}`;
             return;
           }
 
-          // /goal status: ALWAYS shows the formatted status.
-          // Also toggles the web UI sidebar widget as a side-effect so the
-          // user can dismiss or restore it without losing the status text here.
-          const wasShowing = gs.showWidget !== false;
-          gs.showWidget = !wasShowing;
+          if (command.mode === "show") gs.showWidget = true;
+          else if (command.mode === "hide") gs.showWidget = false;
+          else gs.showWidget = gs.showWidget === false;
           await saveGoalState(msgInput.sessionID, gs);
+          gs = await loadGoalState(msgInput.sessionID).catch(() => gs);
 
           const formatted = formatStatusLines(gs).join("\n");
           const widgetNote = gs.showWidget
             ? "(Web UI status panel: now visible)"
-            : "(Web UI status panel: now hidden — type /goal status again to show it)";
+            : "(Web UI status panel: now hidden — type /goal status show to show it)";
           textPart.text = `Output the following goal status exactly as shown, no extra commentary:\n\n${formatted}\n\n${widgetNote}`;
           return;
         }
 
         // ── Mutations: instruct the LLM to call the goal_engine tool ───────
         let instruction;
-        switch (subCmd) {
-          case "start":
-            instruction = argText
-              ? `Use the goal_engine tool now: action="start", objective="${argText}". After calling it, immediately begin working on the goal.`
-              : `Use the goal_engine tool: action="status". Display the result.`;
-            break;
-          case "pause":
-            instruction = `Use the goal_engine tool now: action="pause". Acknowledge that the goal will pause after the current step.`;
-            break;
-          case "pause-now":
-          case "pause_now":
-            instruction = `Use the goal_engine tool now: action="pause_now". Acknowledge the goal is immediately paused.`;
-            break;
-          case "resume":
-            instruction = `Use the goal_engine tool now: action="resume". If a paused goal exists, resume it and continue working toward it immediately.`;
-            break;
-          case "clear":
+        if (command.kind === "start") {
+          const options = command.options;
+          const toolArgs = [
+            'action="start"',
+            `objective=${JSON.stringify(options.objective)}`,
+            `max_turns=${options.maxTurns}`,
+          ];
+          if (options.verifyCommand) toolArgs.push(`verify_command=${JSON.stringify(options.verifyCommand)}`);
+          instruction = options.objective
+            ? `Use the goal_engine tool now: ${toolArgs.join(", ")}. After calling it, immediately begin working on the goal.`
+            : `Use the goal_engine tool: action="status". Display the result.`;
+        } else if (command.kind === "tool") {
+          if (command.action === "clear") {
             instruction = `Use the goal_engine tool now: action="clear", confirmed=true. Acknowledge the goal was cleared.`;
-            break;
-          default:
-            // Bare "/goal <objective>" — whole rest is the objective
-            instruction = rest
-              ? `Use the goal_engine tool now: action="start", objective="${rest}". After calling it, immediately begin working on the goal.`
-              : `Use the goal_engine tool: action="status". Display the result.`;
+          } else if (command.action === "set_limit") {
+            instruction = `Use the goal_engine tool now: action="set_limit", max_turns=${Number.isFinite(command.maxTurns) ? command.maxTurns : 0}. Acknowledge the new goal run limit.`;
+          } else if (command.action === "resume_last") {
+            instruction = `Use the goal_engine tool now: action="resume_last". If a persisted goal exists, resume it and continue working toward it immediately.`;
+          } else {
+            instruction = `Use the goal_engine tool now: action="${command.action}". Acknowledge the new goal state.`;
+          }
+        } else {
+          instruction = `Use the goal_engine tool: action="status". Display the result.`;
         }
 
         textPart.text = instruction;
@@ -783,6 +918,12 @@ When an active goal exists, the system prompt is automatically injected with the
 
         gs.compactionCount += 1;
         gs.lastCompactedAt = now;
+        const tokensBefore = compactInput?.preparation?.tokensBefore
+          ?? compactInput?.compactionEntry?.tokensBefore
+          ?? compactInput?.tokensBefore;
+        const compactionEntryId = compactInput?.compactionEntry?.id ?? compactInput?.entryId ?? null;
+        gs.lastCompactionTokens = Number.isFinite(tokensBefore) ? tokensBefore : null;
+        gs.lastCompactionEntryId = typeof compactionEntryId === "string" ? compactionEntryId : null;
         await saveGoalState(sessionID, gs);
 
         output.context.push(buildGoalPrompt(gs));

@@ -4,6 +4,9 @@
   "description": "Autonomous multi-turn goal execution plugin for OpenCode",
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test index.test.js"
+  },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.0"
   }
