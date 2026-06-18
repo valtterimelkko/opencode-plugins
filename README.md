@@ -22,6 +22,13 @@ Features:
 - verification-oriented completion model with optional shell verification
 - companion status rendering in Pi Web UI when used together, including compaction progress
 
+Quick live validation, when Pi Web UI's Internal API is available:
+
+```bash
+cd goal-engine
+npm run live:validate -- --socket ~/.pi-web-ui/internal-api.sock --token-path ~/.pi-web-ui/internal-api-token
+```
+
 ### `opencode-memory-plugin`
 Persistent memory helper for OpenCode.
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseGoalStartOptions,
   parseSlashGoalCommand,
+  shouldSuppressIdleEvent,
   stripWrappingQuotes,
 } from './index.js';
 
@@ -30,4 +31,18 @@ test('parseSlashGoalCommand supports status show/hide and bare quoted objectives
     kind: 'start',
     options: { objective: 'Write docs', maxTurns: 2, verifyCommand: null },
   });
+});
+
+test('shouldSuppressIdleEvent does not suppress a fast real continuation with text', () => {
+  const sessionText = new Map([['ses_fast', 'Progress: turn 2\nStatus: CONTINUING']]);
+  const lastContinuationAt = new Map([['ses_fast', 10_000]]);
+
+  assert.equal(shouldSuppressIdleEvent('ses_fast', sessionText, lastContinuationAt, 12_000), false);
+});
+
+test('shouldSuppressIdleEvent suppresses duplicate idle events with no new text', () => {
+  const sessionText = new Map();
+  const lastContinuationAt = new Map([['ses_dup', 10_000]]);
+
+  assert.equal(shouldSuppressIdleEvent('ses_dup', sessionText, lastContinuationAt, 12_000), true);
 });

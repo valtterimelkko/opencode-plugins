@@ -5,7 +5,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "node --test index.test.js"
+    "test": "node --test index.test.js",
+    "live:validate": "node scripts/live-validate-goal-commands.js"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.0"

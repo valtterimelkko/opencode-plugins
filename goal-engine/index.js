@@ -483,6 +483,17 @@ async function processAgentEnd(sessionID, gs, lastText, client, errorCounters, l
   await queueContinuation(sessionID, client, lastContinuationAt);
 }
 
+export function shouldSuppressIdleEvent(sessionID, sessionText, lastContinuationAt, now = Date.now()) {
+  const lastFired = lastContinuationAt.get(sessionID) ?? 0;
+  if (now - lastFired >= CONTINUATION_COOLDOWN_MS) return false;
+
+  // A fast follow-up turn can legitimately finish within the cooldown window.
+  // If we've accumulated assistant text for this session, treat it as a real
+  // new completion rather than a duplicate idle event from the previous batch.
+  const accumulatedText = sessionText.get(sessionID) ?? "";
+  return accumulatedText.trim().length === 0;
+}
+
 async function queueContinuation(sessionID, client, lastContinuationAt) {
   await new Promise((resolve) => setTimeout(resolve, CONTINUATION_DELAY_MS));
 
@@ -792,8 +803,8 @@ When an active goal exists, the system prompt is automatically injected with the
         // Guard 1: suppress duplicate idle events from the same completion batch.
         // Multiple session.idle events can arrive sequentially (one per queued message)
         // within a second or two of each other; only the first should trigger continuation.
-        const lastFired = lastContinuationAt.get(sessionID) ?? 0;
-        if (Date.now() - lastFired < CONTINUATION_COOLDOWN_MS) return;
+        // Do not suppress a fast real follow-up turn that has emitted assistant text.
+        if (shouldSuppressIdleEvent(sessionID, sessionText, lastContinuationAt)) return;
 
         // Guard 2: prevent concurrent processing for the same session.
         if (processingEnd.has(sessionID)) return;
