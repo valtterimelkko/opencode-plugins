@@ -56,12 +56,35 @@ Pi Web UI can operate without these plugins, but some workflow niceties become r
 
 ## Installation shape
 
-Each plugin is a small ESM package with a `package.json` and `index.js` entry point.
+`goal-engine` has `index.js` + `tui-commands.js` + `scripts/` + `index.test.js`; the other two plugins are `index.js` only (minimal stubs). Each is a small ESM package with `package.json`.
 
 See the plugin directories directly:
-- `goal-engine/`
-- `opencode-memory-plugin/`
-- `opencode-parallel-orchestrator-plugin/`
+- `goal-engine/` (`index.js` + `tui-commands.js` + `scripts/live-validate-*.js` + `index.test.js`)
+- `opencode-memory-plugin/` (`index.js` only)
+- `opencode-parallel-orchestrator-plugin/` (`index.js` only)
+
+## Deploy / verify (OpenCode plugin discovery)
+
+```bash
+# install from a local checkout
+npm install file:goal-engine              # or: opencode plugin add ./goal-engine
+npm install file:opencode-memory-plugin
+npm install file:opencode-parallel-orchestrator-plugin
+# verify they are visible to the host
+opencode plugins list        # (or `opencode plugin list` per your version)
+```
+
+Deployed plugins are resolved via the host's plugin registry/config; goal-engine state lives at `~/.opencode/goal-engine/<sessionID>.goal.json` (not `~/.pi/...`).
+
+## Pi ↔ OpenCode parity (public scope)
+
+| Pi (`pi-enhancement`) | OpenCode (`opencode-plugins`) | State |
+|-----------------------|-------------------------------|-------|
+| `memory/` | `opencode-memory-plugin/` | Stub — tool + memory files ported, heuristic extraction minimal |
+| `goal-engine/` | `goal-engine/` | Active — multi-turn `/goal`, governor, compaction-aware, live:validate |
+| `parallel-orchestrator/` | `opencode-parallel-orchestrator-plugin/` | Stub — `git worktree` tool wrappers |
+
+This repo is the public OpenCode companion side — intentionally narrower than the private Pi+Web UI setup. Pi Web UI's `server/src/pi/parallel/` orchestration remains part of the larger private environment, not here.
 
 ## Public-release note
 
